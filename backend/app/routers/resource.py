@@ -97,6 +97,7 @@ from app.services.query_audit import QueryAuditService
 from app.services.cost_govern import CostGovernService
 from app.services.data_contract import DataContractService
 from app.services.semantic_model import SemanticModelService
+from app.services.metric_batch import MetricBatchService
 
 source_svc = SourceRegistryService()
 semantic_svc = SemanticModelService()
@@ -110,6 +111,7 @@ rewrite_svc = QueryRewriteService()
 audit_svc = QueryAuditService()
 cost_svc = CostGovernService()
 contract_svc = DataContractService()
+metric_batch_svc = MetricBatchService()
 
 
 @router.post("/pipelines/source-to-federated")
@@ -221,3 +223,52 @@ def pipeline_cost_aggregate_alert() -> dict[str, Any]:
             "cost_aggregation": cost_svc.aggregate_module_costs(),
             "quota_check": cost_svc.check_monthly_quota(),
             "cache_report": result_cache_svc.cache_hit_rate_report()}
+
+
+# -- 分组指标批次：整组公式锁定同一立方批次，批量结算并缓存可回查凭据 --
+
+@router.post("/pipelines/metric-batch/lock")
+def pipeline_metric_batch_lock(
+    batch_no: str = Query(...), batch_name: str = Query(...), cube_id: int = Query(...),
+    metric_ids: str = Query(default=""), delivery: str = Query(default="尽快交付可算部分"),
+) -> dict[str, Any]:
+    """登记分组指标批次清单并锁定到同一个已确认立方批次。"""
+    entry, missing = metric_batch_svc.create_entry({
+        "批次编号": batch_no, "批次名称": batch_name, "锁定立方": f"olap_cube:{cube_id}",
+        "指标编号清单": metric_ids, "交付策略": delivery})
+    if entry is None:
+        raise HTTPException(status_code=400, detail=f"创建分组指标批次失败: {missing}")
+    lock = metric_batch_svc.lock_cube_batch(entry["id"])
+    if not lock["ok"]:
+        raise HTTPException(status_code=400, detail=lock["message"])
+    return {"ok": True, "pipeline": "metric_batch_lock", "batch_id": entry["id"], "lock": lock,
+            "entry": metric_batch_svc.get_entry(entry["id"])}
+
+
+@router.post("/pipelines/metric-batch/{batch_id}/settle")
+def pipeline_metric_batch_settle(batch_id: int) -> dict[str, Any]:
+    """并发结算：按批次+指标编号去重，结果缓存接收结算值并回写缓存凭据。"""
+    result = metric_batch_svc.settle_batch(batch_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {"ok": True, "pipeline": "metric_batch_settle", **result,
+            "entry": metric_batch_svc.get_entry(batch_id)}
+
+
+@router.post("/pipelines/metric-batch/{batch_id}/resume")
+def pipeline_metric_batch_resume(batch_id: int) -> dict[str, Any]:
+    """补齐输入后续跑原批：复用已写入的缓存凭据，仅重算挂起/失败指标。"""
+    result = metric_batch_svc.resume_batch(batch_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return {"ok": True, "pipeline": "metric_batch_resume", **result,
+            "entry": metric_batch_svc.get_entry(batch_id)}
+
+
+@router.get("/pipelines/metric-batch/{batch_id}/report")
+def pipeline_metric_batch_report(batch_id: int) -> dict[str, Any]:
+    """报表核对：逐条公式依赖是否齐全、分子分母与缓存凭据是否可回查。"""
+    result = metric_batch_svc.dependency_report(batch_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result

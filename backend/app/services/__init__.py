@@ -7,6 +7,7 @@ from app.services.semantic_model import SemanticModelService
 from app.services.query_federation import QueryFederationService
 from app.services.olap_cube import OlapCubeService
 from app.services.metric_factory import MetricFactoryService
+from app.services.metric_batch import MetricBatchService
 from app.services.dimension_tree import DimensionTreeService
 from app.services.aggregate_cache import AggregateCacheService
 from app.services.query_rewrite import QueryRewriteService
@@ -31,6 +32,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "query_federation": QueryFederationService(),
     "olap_cube": OlapCubeService(),
     "metric_factory": MetricFactoryService(),
+    "metric_batch": MetricBatchService(),
     "dimension_tree": DimensionTreeService(),
     "aggregate_cache": AggregateCacheService(),
     "query_rewrite": QueryRewriteService(),
